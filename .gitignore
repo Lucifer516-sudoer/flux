@@ -14,3 +14,7 @@ yarn-error.log*
 # Local database
 *.db
 *.db-journal
+
+# Python virtual environment
+venv/
+/venv/

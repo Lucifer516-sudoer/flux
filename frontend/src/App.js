@@ -20,6 +20,7 @@ function App() {
   const [currentView, setCurrentView] = useState('dashboard');
   const [isAddTradeOpen, setIsAddTradeOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState(null);
+  const [screenshotFile, setScreenshotFile] = useState(null);
   
   // Filter states
   const [filters, setFilters] = useState({
@@ -107,21 +108,34 @@ function App() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    try {
-      const tradeData = {
-        ...formData,
-        entry_price: parseFloat(formData.entry_price),
-        exit_price: parseFloat(formData.exit_price),
-        stop_loss: formData.stop_loss ? parseFloat(formData.stop_loss) : null,
-        take_profit: formData.take_profit ? parseFloat(formData.take_profit) : null,
-        risk_amount: parseFloat(formData.risk_amount),
-        result_amount: parseFloat(formData.result_amount),
-      };
 
+    const tradeFormData = new FormData();
+
+    // Append all form data fields
+    Object.keys(formData).forEach(key => {
+        if (formData[key] !== '' && formData[key] !== null) {
+            tradeFormData.append(key, formData[key]);
+        }
+    });
+
+    // Append the screenshot file if it exists
+    if (screenshotFile) {
+        tradeFormData.append('screenshot', screenshotFile);
+    }
+
+    try {
       if (editingTrade) {
-        await axios.put(`${API_BASE_URL}/api/trades/${editingTrade.id}`, tradeData);
+        await axios.put(`${API_BASE_URL}/api/trades/${editingTrade.id}`, tradeFormData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
       } else {
-        await axios.post(`${API_BASE_URL}/api/trades`, tradeData);
+        await axios.post(`${API_BASE_URL}/api/trades`, tradeFormData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
       }
       
       await fetchTrades();
@@ -146,6 +160,7 @@ function App() {
       notes: ''
     });
     setEditingTrade(null);
+    setScreenshotFile(null);
   };
 
   const handleEdit = (trade) => {
@@ -162,6 +177,7 @@ function App() {
       notes: trade.notes || ''
     });
     setEditingTrade(trade);
+    setScreenshotFile(null);
     setIsAddTradeOpen(true);
   };
 
@@ -506,6 +522,15 @@ function App() {
           rows={4}
         />
       </div>
+      <div className="form-group full-width">
+        <Label htmlFor="screenshot">Screenshot</Label>
+        <Input
+          id="screenshot"
+          type="file"
+          onChange={(e) => setScreenshotFile(e.target.files[0])}
+          accept="image/*"
+        />
+      </div>
       <div className="form-actions">
         <Button type="button" variant="outline" onClick={() => { resetForm(); setIsAddTradeOpen(false); }}>
           Cancel
@@ -811,6 +836,7 @@ function App() {
                 <TableHead>Risk</TableHead>
                 <TableHead>Result</TableHead>
                 <TableHead>R:R</TableHead>
+                <TableHead>Screenshot</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -836,6 +862,13 @@ function App() {
                     </TableCell>
                     <TableCell className={`rr-cell ${parseFloat(trade.result_amount) >= 0 ? 'profit' : 'loss'}`}>
                       {riskReward}
+                    </TableCell>
+                    <TableCell>
+                      {trade.screenshot_url && (
+                        <a href={`${API_BASE_URL}${trade.screenshot_url}`} target="_blank" rel="noopener noreferrer">
+                          <img src={`${API_BASE_URL}${trade.screenshot_url}`} alt="Trade Screenshot" style={{ width: '100px', height: 'auto', cursor: 'pointer' }} />
+                        </a>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="action-buttons">
