@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
@@ -7,11 +7,17 @@ from datetime import datetime
 import os
 import uuid
 from dotenv import load_dotenv
+import shutil
 
 # Load environment variables
 load_dotenv()
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI(title="Trade Journal API", version="1.0.0")
+
+# Mount the 'uploads' directory to serve static files
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # CORS middleware
 app.add_middleware(
@@ -26,6 +32,11 @@ app.add_middleware(
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 DATABASE_NAME = "trade_journal"
 COLLECTION_NAME = "trades"
+UPLOADS_DIR = "uploads"
+
+# Create uploads directory if it doesn't exist
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
 
 client = AsyncIOMotorClient(MONGO_URL)
 database = client[DATABASE_NAME]
@@ -43,12 +54,24 @@ class TradeBase(BaseModel):
     risk_amount: float
     result_amount: float
     notes: Optional[str] = ""
+    screenshot_url: Optional[str] = None
 
 class TradeCreate(TradeBase):
     pass
 
-class TradeUpdate(TradeBase):
-    pass
+class TradeUpdate(BaseModel):
+    date: Optional[str] = None
+    pair: Optional[str] = None
+    direction: Optional[str] = None
+    entry_price: Optional[float] = None
+    exit_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    risk_amount: Optional[float] = None
+    result_amount: Optional[float] = None
+    notes: Optional[str] = None
+    screenshot_url: Optional[str] = None
+
 
 class Trade(TradeBase):
     id: str
@@ -72,6 +95,7 @@ def trade_helper(trade) -> dict:
         "risk_amount": trade["risk_amount"],
         "result_amount": trade["result_amount"],
         "notes": trade.get("notes", ""),
+        "screenshot_url": trade.get("screenshot_url"),
         "created_at": trade["created_at"],
         "updated_at": trade["updated_at"],
     }
@@ -81,21 +105,57 @@ async def root():
     return {"message": "Trade Journal API is running"}
 
 @app.post("/api/trades", response_model=Trade)
-async def create_trade(trade: TradeCreate):
-    """Create a new trade entry"""
-    trade_dict = trade.dict()
+async def create_trade(
+    date: str = Form(...),
+    pair: str = Form(...),
+    direction: str = Form(...),
+    entry_price: float = Form(...),
+    exit_price: float = Form(...),
+    stop_loss: Optional[float] = Form(None),
+    take_profit: Optional[float] = Form(None),
+    risk_amount: float = Form(...),
+    result_amount: float = Form(...),
+    notes: Optional[str] = Form(""),
+    screenshot: Optional[UploadFile] = File(None)
+):
+    """Create a new trade entry with an optional screenshot"""
+    trade_dict = {
+        "date": date,
+        "pair": pair,
+        "direction": direction,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "risk_amount": risk_amount,
+        "result_amount": result_amount,
+        "notes": notes,
+    }
+
+    if screenshot:
+        # Create a unique filename
+        file_extension = os.path.splitext(screenshot.filename)[1]
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = os.path.join(UPLOADS_DIR, unique_filename)
+
+        # Save the file
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(screenshot.file, buffer)
+
+        trade_dict["screenshot_url"] = f"/uploads/{unique_filename}"
+
     trade_dict["id"] = str(uuid.uuid4())
     trade_dict["created_at"] = datetime.utcnow()
     trade_dict["updated_at"] = datetime.utcnow()
-    
+
     # Insert the trade into MongoDB
     result = await trades_collection.insert_one(trade_dict)
-    
+
     if result.inserted_id:
         # Retrieve the created trade
         created_trade = await trades_collection.find_one({"id": trade_dict["id"]})
         return trade_helper(created_trade)
-    
+
     raise HTTPException(status_code=400, detail="Trade creation failed")
 
 @app.get("/api/trades", response_model=List[Trade])
@@ -132,29 +192,67 @@ async def get_trade(trade_id: str):
     raise HTTPException(status_code=404, detail="Trade not found")
 
 @app.put("/api/trades/{trade_id}", response_model=Trade)
-async def update_trade(trade_id: str, trade_update: TradeUpdate):
+async def update_trade(
+    trade_id: str,
+    date: str = Form(None),
+    pair: str = Form(None),
+    direction: str = Form(None),
+    entry_price: float = Form(None),
+    exit_price: float = Form(None),
+    stop_loss: Optional[float] = Form(None),
+    take_profit: Optional[float] = Form(None),
+    risk_amount: float = Form(None),
+    result_amount: float = Form(None),
+    notes: Optional[str] = Form(None),
+    screenshot: Optional[UploadFile] = File(None)
+):
     """Update an existing trade"""
-    # Check if trade exists
     existing_trade = await trades_collection.find_one({"id": trade_id})
     if not existing_trade:
         raise HTTPException(status_code=404, detail="Trade not found")
-    
-    # Prepare update data
-    update_data = trade_update.dict()
-    update_data["updated_at"] = datetime.utcnow()
-    
-    # Update the trade
-    result = await trades_collection.update_one(
-        {"id": trade_id}, 
-        {"$set": update_data}
-    )
-    
-    if result.modified_count == 1:
-        # Return updated trade
-        updated_trade = await trades_collection.find_one({"id": trade_id})
-        return trade_helper(updated_trade)
-    
-    raise HTTPException(status_code=400, detail="Trade update failed")
+
+    update_data = {
+        k: v for k, v in {
+            "date": date,
+            "pair": pair,
+            "direction": direction,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "risk_amount": risk_amount,
+            "result_amount": result_amount,
+            "notes": notes,
+        }.items() if v is not None
+    }
+
+    if screenshot:
+        # If there's an old screenshot, delete it
+        if existing_trade.get("screenshot_url"):
+            old_screenshot_path = os.path.join(UPLOADS_DIR, os.path.basename(existing_trade["screenshot_url"]))
+            if os.path.exists(old_screenshot_path):
+                os.remove(old_screenshot_path)
+
+        # Save the new screenshot
+        file_extension = os.path.splitext(screenshot.filename)[1]
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = os.path.join(UPLOADS_DIR, unique_filename)
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(screenshot.file, buffer)
+
+        update_data["screenshot_url"] = f"/uploads/{unique_filename}"
+
+    if update_data:
+        update_data["updated_at"] = datetime.utcnow()
+        result = await trades_collection.update_one(
+            {"id": trade_id},
+            {"$set": update_data}
+        )
+
+    # Return updated trade data
+    updated_trade = await trades_collection.find_one({"id": trade_id})
+    return trade_helper(updated_trade)
 
 @app.delete("/api/trades/{trade_id}")
 async def delete_trade(trade_id: str):
